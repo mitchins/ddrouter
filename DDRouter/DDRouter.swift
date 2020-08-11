@@ -224,9 +224,9 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
         if !route.query.isEmpty {
             let allowedCharacterSet = route.allowedQueryParameterCharacterSet
             let items = route.query.map { (key, value) -> URLQueryItem in
-                let encodedValue = key.addingPercentEncoding(
+                let encodedValue = value.addingPercentEncoding(
                     withAllowedCharacters: allowedCharacterSet)
-                URLQueryItem(name: key, value: encodedValue)
+                return URLQueryItem(name: key, value: encodedValue)
             }
             urlComponents.queryItems = items
         }

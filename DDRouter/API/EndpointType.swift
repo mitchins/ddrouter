@@ -24,8 +24,9 @@ public protocol EndpointType {
 }
 
 public extension EndpointType {
-    // allowed character set for percent encoding of query
+    // Allowed character set for percent encoding of query values
+    // Removing + sign from character set because + has a semantic value in url query
     var allowedQueryParameterCharacterSet: CharacterSet {
-        return .urlQueryAllowed
+        return CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "+"))
     }
 }
