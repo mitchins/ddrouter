@@ -244,7 +244,12 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
 
         // Build query
         if !route.query.isEmpty {
-            let items = route.query.map { URLQueryItem(name: $0, value: $1) }
+            let allowedCharacterSet = route.allowedQueryParameterCharacterSet
+            let items = route.query.map { (key, value) -> URLQueryItem in
+                let encodedValue = value.addingPercentEncoding(
+                    withAllowedCharacters: allowedCharacterSet)
+                return URLQueryItem(name: key, value: encodedValue)
+            }
             urlComponents.queryItems = items
         }
 
@@ -327,4 +332,3 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
         print(prettyPrintedString)
     }
 }
-
