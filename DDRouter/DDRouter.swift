@@ -19,16 +19,23 @@ public protocol RouterProtocol {
     associatedtype Endpoint: EndpointType
     associatedtype E: APIErrorModelProtocol
     func request<T: Decodable>(_ route: Endpoint) -> Single<T>
+    func requestData(_ route: Endpoint) -> Single<DataOrEmpty>
     init(ephemeralSession: Bool)
 }
 
 public struct EmptyStruct: Decodable {}
+
+public enum DataOrEmpty {
+    case data(Data)
+    case empty
+}
 
 extension RouterProtocol {
     public typealias Empty = EmptyStruct
 }
 
 public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterProtocol {
+
     var urlSession: URLSession?
 
     required public init(ephemeralSession: Bool = false) {
@@ -50,8 +57,37 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
 
     // this returns a single that will always subscribe on a background thread
     // and observe on the main thread
-    public func request<T: Decodable>(_ route: Endpoint) -> Single<T> {
 
+
+    public func request<T: Decodable>(_ route: Endpoint) -> Single<T> {
+        return requestData(route).flatMap({ result -> Single<T> in
+            switch result {
+            case let .data(data):
+                return Single<T>.create { single in
+                    do {
+                        let decodedResponse = try JSONDecoder().decode(T.self, from: data)
+                        single(.success(decodedResponse))
+                        return Disposables.create()
+                    }
+                    catch (let error) {
+                        single(.error(APIError<E>.serializeError(error)))
+                        return Disposables.create()
+                    }
+                }
+            case .empty:
+                return Single<T>.create { single in
+                    if let empty = Empty() as? T {
+                        single(.success(empty))
+                    } else {
+                        single(.error(APIError<E>.unknownError))
+                    }
+                    return Disposables.create()
+                }
+            }
+        })
+    }
+
+    public func requestData(_ route: Endpoint) -> Single<DataOrEmpty> {
         return Single.create { [weak self] single in
             guard let self = self else {
                 single(.error(APIError<E>.unknownError))
@@ -117,25 +153,11 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
 
                 // 204 success but no content at all
                 case 204:
-                // Don't even bother reading content server has indicated it's empty
-                    if let result = Empty() as? T {
-                        // Canonical type for empty as defined by us
-                        single(.success(result))
-                    }  else {
-                        // We can't deserialise the type because there's no init() in protocol
-                        single(.error(NetworkError.encodingFailed))
-                    }
-
+                    // Canonical type for empty as defined by us
+                    single(.success(DataOrEmpty.empty))
                 // 2xx success.
                 case 200...203, 205...299:
-                    do {
-                        let decodedResponse = try JSONDecoder().decode(T.self, from: responseData)
-                        single(.success(decodedResponse))
-                    }
-                    catch (let error) {
-                        single(.error(APIError<E>.serializeError(error)))
-                    }
-
+                    single(.success(DataOrEmpty.data(responseData)))
                 // 4xx client errors
                 case 400...499:
 
