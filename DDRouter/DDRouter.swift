@@ -241,16 +241,16 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
             resolvingAgainstBaseURL: true) else {
                 throw APIError<E>.internalError
         }
-
+        
         // Build query
         if !route.query.isEmpty {
-            let allowedCharacterSet = route.allowedQueryParameterCharacterSet
-            let items = route.query.map { (key, value) -> URLQueryItem in
-                let encodedValue = value.addingPercentEncoding(
-                    withAllowedCharacters: allowedCharacterSet)
-                return URLQueryItem(name: key, value: encodedValue)
-            }
+            let items = route.query.map { URLQueryItem(name: $0, value: $1) }
             urlComponents.queryItems = items
+        }
+        
+        if route.encodePlusSignInQuery {
+            urlComponents.percentEncodedQuery = urlComponents.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
         }
 
         // get the url

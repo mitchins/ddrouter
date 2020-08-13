@@ -21,12 +21,10 @@ public protocol EndpointType {
     // query parameters
     // todo: why is this one not typealiased the same as headers?
     var query: [String: String] { get }
+    
+    // Giving the option to encode plus sign for queries
+    // https://developer.apple.com/documentation/foundation/nsurlcomponents/1407752-queryitems
+    var encodePlusSignInQuery: Bool { get }
 }
 
-public extension EndpointType {
-    // Allowed character set for percent encoding of query values
-    // Removing + sign from character set because + has a semantic value in url query
-    var allowedQueryParameterCharacterSet: CharacterSet {
-        return CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "+"))
-    }
-}
+
