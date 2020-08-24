@@ -20,6 +20,7 @@ public protocol RouterProtocol {
     associatedtype E: APIErrorModelProtocol
     func request<T: Decodable>(_ route: Endpoint) -> Single<T>
     func requestData(_ route: Endpoint) -> Single<DataOrEmpty>
+    func uploadData<T: Decodable>(_ route: Endpoint, data: Data) -> Single<T>
     init(ephemeralSession: Bool)
 }
 
@@ -58,33 +59,8 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
     // this returns a single that will always subscribe on a background thread
     // and observe on the main thread
 
-
     public func request<T: Decodable>(_ route: Endpoint) -> Single<T> {
-        return requestData(route).flatMap({ result -> Single<T> in
-            switch result {
-            case let .data(data):
-                return Single<T>.create { single in
-                    do {
-                        let decodedResponse = try JSONDecoder().decode(T.self, from: data)
-                        single(.success(decodedResponse))
-                        return Disposables.create()
-                    }
-                    catch (let error) {
-                        single(.error(APIError<E>.serializeError(error)))
-                        return Disposables.create()
-                    }
-                }
-            case .empty:
-                return Single<T>.create { single in
-                    if let empty = Empty() as? T {
-                        single(.success(empty))
-                    } else {
-                        single(.error(APIError<E>.unknownError))
-                    }
-                    return Disposables.create()
-                }
-            }
-        })
+        return requestData(route).flatMap(jsonResponseHandler)
     }
 
     public func requestData(_ route: Endpoint) -> Single<DataOrEmpty> {
@@ -117,110 +93,11 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
                 single(.error(APIError<E>.unknownError))
                 return Disposables.create()
             }
-
+            
             // perform the request
-            task = urlSession.dataTask(with: request) { data, response, error in
-
-                // return any error from the url session task - todo: wrap this error
-                if let error = error {
-                    single(.error(error))
-                    return
-                }
-
-                // get the response body or throw null data error
-                // todo: technically should throw different error if
-                // first cast fails
-                guard
-                    let response = response as? HTTPURLResponse,
-                    let responseData = data else {
-
-                    single(.error(APIError<E>.nullData))
-                    return
-                }
-
-                // print response
-                if DDRouter.printToConsole {
-
-                    // log response - todo: proper logging
-                    NetworkLogger.log(response: response)
-
-                    // print response data
-                    Router.printJSONData(data: responseData)
-                }
-
-                // response switch
-                switch response.statusCode {
-
-                // 204 success but no content at all
-                case 204:
-                    // Canonical type for empty as defined by us
-                    single(.success(DataOrEmpty.empty))
-                // 2xx success.
-                case 200...203, 205...299:
-                    single(.success(DataOrEmpty.data(responseData)))
-                // 4xx client errors
-                case 400...499:
-
-                    // match the actual status code (or unknown error)
-                    let statusCode = HTTPStatusCode(rawValue: response.statusCode)
-                    switch statusCode {
-
-                    // bad request
-                    case .badRequest:
-                        let error = try? JSONDecoder().decode(
-                            E.self,
-                            from: responseData)
-                        single(.error(APIError<E>.badRequest(error)))
-
-                    // unauthorized
-                    case .unauthorized:
-                        let error = try? JSONDecoder().decode(
-                            E.self,
-                            from: responseData)
-                        single(.error(APIError<E>.unauthorized(error)))
-                        return
-                        // todo: add autoretry back, outside this function
-
-                    // resource not found
-                    case .notFound:
-                        single(.error(APIError<E>.notFound))
-
-                    // too many requests
-                    case .tooManyRequests:
-                        let error = try? JSONDecoder().decode(
-                            E.self,
-                            from: responseData)
-                        single(.error(APIError<E>.tooManyRequests(error)))
-
-                    // forbidden
-                    case .forbidden:
-                        let error = try? JSONDecoder().decode(
-                            E.self,
-                            from: responseData)
-                        single(.error(APIError<E>.forbidden(error)))
-
-                    // unknown
-                    default:
-                        if let error = try? JSONDecoder().decode(
-                            E.self,
-                            from: responseData) {
-                            single(.error(APIError<E>.other4xx(error)))
-                        } else {
-                            single(.error(APIError<E>.unknownError))
-                        }
-                    }
-
-                // 5xx server error
-                case 500...599:
-                    let error = try? JSONDecoder().decode(
-                        E.self,
-                        from: responseData)
-                    single(.error(APIError<E>.serverError(error)))
-
-                // default / unknown error
-                default:
-                    single(.error(APIError<E>.unknownError))
-                }
+            task = urlSession.dataTask(with: request) { [weak self] data, response, error in
+                guard let self = self else { return }
+                single(self.responseHandler(data: data, response: response, error: error))
             }
             task?.resume()
 
@@ -230,6 +107,181 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
         }
         .subscribeOn(SerialDispatchQueueScheduler(qos: .background))
         .observeOn(MainScheduler.instance)
+    }
+    
+    public func uploadData<T: Decodable>(_ route: Endpoint, data: Data) -> Single<T> {
+        return uploadData(route, from: data).flatMap(jsonResponseHandler)
+    }
+    
+    public func uploadData(_ route: Endpoint, from uploadData: Data) -> Single<DataOrEmpty> {
+        return Single.create { [weak self] single in
+            guard let self = self else {
+                single(.error(APIError<E>.unknownError))
+                return Disposables.create()
+            }
+            
+            var task: URLSessionTask?
+            
+            // try to build the request
+            let request: URLRequest
+            do {
+                request = try self.buildRequest(from: route)
+            }
+            catch let error {
+                single(.error(error))
+                return Disposables.create()
+            }
+
+            // log the request
+            // todo: log properly
+            if DDRouter.printToConsole {
+                NetworkLogger.log(request: request)
+            }
+
+            // get the session
+            guard let urlSession = self.urlSession else {
+                single(.error(APIError<E>.unknownError))
+                return Disposables.create()
+            }
+            // perform the request
+            task = urlSession.uploadTask(with: request, from: uploadData)  { [weak self] data, response, error in
+                guard let self = self else { return }
+                single(self.responseHandler(data: data, response: response, error: error))
+            }
+            task?.resume()
+
+            return Disposables.create {
+                task?.cancel()
+            }
+        }
+        .subscribeOn(SerialDispatchQueueScheduler(qos: .background))
+        .observeOn(MainScheduler.instance)
+    }
+    
+    private func responseHandler(data: Data?, response: URLResponse?, error: Error?) -> SingleEvent<DataOrEmpty> {
+        // return any error from the url session task - todo: wrap this error
+        if let error = error {
+            return .error(error)
+        }
+
+        // get the response body or throw null data error
+        // todo: technically should throw different error if
+        // first cast fails
+        guard
+            let response = response as? HTTPURLResponse,
+            let responseData = data else {
+
+            return .error(APIError<E>.nullData)
+        }
+
+        // print response
+        if DDRouter.printToConsole {
+
+            // log response - todo: proper logging
+            NetworkLogger.log(response: response)
+
+            // print response data
+            Router.printJSONData(data: responseData)
+        }
+
+        // response switch
+        switch response.statusCode {
+
+        // 204 success but no content at all
+        case 204:
+            // Canonical type for empty as defined by us
+            return .success(DataOrEmpty.empty)
+        // 2xx success.
+        case 200...203, 205...299:
+            return .success(DataOrEmpty.data(responseData))
+        // 4xx client errors
+        case 400...499:
+
+            // match the actual status code (or unknown error)
+            let statusCode = HTTPStatusCode(rawValue: response.statusCode)
+            switch statusCode {
+
+            // bad request
+            case .badRequest:
+                let error = try? JSONDecoder().decode(
+                    E.self,
+                    from: responseData)
+                return .error(APIError<E>.badRequest(error))
+
+            // unauthorized
+            case .unauthorized:
+                let error = try? JSONDecoder().decode(
+                    E.self,
+                    from: responseData)
+                return .error(APIError<E>.unauthorized(error))
+                // todo: add autoretry back, outside this function
+
+            // resource not found
+            case .notFound:
+                return .error(APIError<E>.notFound)
+
+            // too many requests
+            case .tooManyRequests:
+                let error = try? JSONDecoder().decode(
+                    E.self,
+                    from: responseData)
+                return .error(APIError<E>.tooManyRequests(error))
+
+            // forbidden
+            case .forbidden:
+                let error = try? JSONDecoder().decode(
+                    E.self,
+                    from: responseData)
+                return .error(APIError<E>.forbidden(error))
+
+            // unknown
+            default:
+                if let error = try? JSONDecoder().decode(
+                    E.self,
+                    from: responseData) {
+                    return .error(APIError<E>.other4xx(error))
+                } else {
+                    return .error(APIError<E>.unknownError)
+                }
+            }
+
+        // 5xx server error
+        case 500...599:
+            let error = try? JSONDecoder().decode(
+                E.self,
+                from: responseData)
+            return .error(APIError<E>.serverError(error))
+
+        // default / unknown error
+        default:
+            return .error(APIError<E>.unknownError)
+        }
+    }
+    
+    private func jsonResponseHandler<T: Decodable>(result: DataOrEmpty) -> Single<T> {
+        switch result {
+        case let .data(data):
+            return Single<T>.create { single in
+                do {
+                    let decodedResponse = try JSONDecoder().decode(T.self, from: data)
+                    single(.success(decodedResponse))
+                    return Disposables.create()
+                }
+                catch (let error) {
+                    single(.error(APIError<E>.serializeError(error)))
+                    return Disposables.create()
+                }
+            }
+        case .empty:
+            return Single<T>.create { single in
+                if let empty = Empty() as? T {
+                    single(.success(empty))
+                } else {
+                    single(.error(APIError<E>.unknownError))
+                }
+                return Disposables.create()
+            }
+        }
     }
 
     // build URLRequest from a given endpoint route
@@ -332,3 +384,4 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
         print(prettyPrintedString)
     }
 }
+
