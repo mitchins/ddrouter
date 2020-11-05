@@ -1,17 +1,25 @@
 import Foundation
 import RxSwift
 
+public protocol DDRouterDelegateProtocol {
+    func requestStarted(request: URLRequest)
+    func requestFinished(request: URLRequest, error: Error?)  // nil if no error
+}
+
 public class DDRouter {
     static var sharedSession: URLSession?
     static var printToConsole = false
+    static var delegate: DDRouterDelegateProtocol?  // The only way the app can observe requests
 
     // must call this
     public static func initialise(
         configuration: URLSessionConfiguration,
-        printToConsole: Bool = false) {
+        printToConsole: Bool = false,
+        delegate: DDRouterDelegateProtocol? = nil) {
 
         sharedSession = URLSession(configuration: configuration)
         Self.printToConsole = printToConsole
+        self.delegate = delegate
     }
 }
 
@@ -97,10 +105,11 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
             // perform the request
             task = urlSession.dataTask(with: request) { [weak self] data, response, error in
                 guard let self = self else { return }
-                single(self.responseHandler(data: data, response: response, error: error))
+                single(self.responseHandler(data: data, response: response, error: error, request: request))
             }
             task?.resume()
-
+            DDRouter.delegate?.requestStarted(request: request)
+            
             return Disposables.create {
                 task?.cancel()
             }
@@ -146,9 +155,10 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
             // perform the request
             task = urlSession.uploadTask(with: request, from: uploadData)  { [weak self] data, response, error in
                 guard let self = self else { return }
-                single(self.responseHandler(data: data, response: response, error: error))
+                single(self.responseHandler(data: data, response: response, error: error, request: request))
             }
             task?.resume()
+            DDRouter.delegate?.requestStarted(request: request)
 
             return Disposables.create {
                 task?.cancel()
@@ -158,7 +168,9 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
         .observeOn(MainScheduler.instance)
     }
     
-    private func responseHandler(data: Data?, response: URLResponse?, error: Error?) -> SingleEvent<DataOrEmpty> {
+    private func responseHandler(data: Data?, response: URLResponse?, error: Error?, request: URLRequest) -> SingleEvent<DataOrEmpty> {
+        DDRouter.delegate?.requestFinished(request: request, error: error)
+        
         // return any error from the url session task - todo: wrap this error
         if let error = error {
             return .error(error)
