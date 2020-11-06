@@ -3,7 +3,7 @@ import RxSwift
 
 public protocol DDRouterDelegateProtocol {
     func requestStarted(request: URLRequest)
-    func requestFinished(request: URLRequest, error: Error?)  // nil if no error
+    func requestFinished(request: URLRequest, statusCode: Int?, error: Error?)  // nil if no error
 }
 
 public class DDRouter {
@@ -169,7 +169,7 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
     }
     
     private func responseHandler(data: Data?, response: URLResponse?, error: Error?, request: URLRequest) -> SingleEvent<DataOrEmpty> {
-        DDRouter.delegate?.requestFinished(request: request, error: error)
+        DDRouter.delegate?.requestFinished(request: request, statusCode: (response as? HTTPURLResponse)?.statusCode, error: error)
         
         // return any error from the url session task - todo: wrap this error
         if let error = error {
