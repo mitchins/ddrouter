@@ -1,6 +1,6 @@
 Pod::Spec.new do |spec|
   spec.name         = 'DDRouter'
-  spec.version      = '2020.1.0'
+  spec.version      = '2020.2.0'
   spec.license      = { :type => 'ISC' }
   spec.homepage     = 'https://hub.deloittedigital.com.au/stash/projects/DDMCD/repos/ddrouter/browse'
   spec.authors      = { 'Deloitte Digital' => 'wrigney@deloitte.com.au' }

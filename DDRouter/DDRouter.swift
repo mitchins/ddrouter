@@ -10,16 +10,19 @@ public class DDRouter {
     static var sharedSession: URLSession?
     static var printToConsole = false
     static var delegate: DDRouterDelegateProtocol?  // The only way the app can observe requests
+    static var urlSessionDelegate: URLSessionDelegate?  // pass through
 
     // must call this
     public static func initialise(
         configuration: URLSessionConfiguration,
         printToConsole: Bool = false,
-        delegate: DDRouterDelegateProtocol? = nil) {
-
-        sharedSession = URLSession(configuration: configuration)
+        delegate: DDRouterDelegateProtocol? = nil,
+        urlSessionDelegate: URLSessionDelegate? = nil) {
         Self.printToConsole = printToConsole
         self.delegate = delegate
+        self.urlSessionDelegate = urlSessionDelegate
+
+        sharedSession = URLSession(configuration: configuration, delegate: DDRouter.urlSessionDelegate, delegateQueue: OperationQueue.main)
     }
 }
 
@@ -54,7 +57,7 @@ public class Router<Endpoint: EndpointType, E: APIErrorModelProtocol>: RouterPro
                 let tempConfiguration = URLSessionConfiguration.ephemeral
                 // Allow monkey patching from the main configuration such as Stubbing etc
                 tempConfiguration.protocolClasses = masterConfiguration.protocolClasses
-                urlSession = URLSession(configuration: tempConfiguration)
+                urlSession = URLSession(configuration: tempConfiguration, delegate: DDRouter.urlSessionDelegate, delegateQueue: OperationQueue.main)
             }
         } else {
             urlSession = DDRouter.sharedSession
